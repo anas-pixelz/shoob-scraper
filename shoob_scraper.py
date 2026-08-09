@@ -378,9 +378,9 @@ def create_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
 
     return uc.Chrome(
-        options=options,
-        version_main=151
-    )
+    options=options,
+    version_main=150
+)
 
 
 def scrape_shoob_two_step():
