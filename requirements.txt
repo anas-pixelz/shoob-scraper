@@ -1,0 +1,5 @@
+beautifulsoup4
+pymongo
+python-dotenv
+selenium
+undetected-chromedriver
