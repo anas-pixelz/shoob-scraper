@@ -71,7 +71,6 @@ def connect_mongodb():
     cards_collection.create_index("name")
     cards_collection.create_index("series")
     cards_collection.create_index("tier")
-    state_collection.create_index("_id", unique=True)
 
     print(f"[+] MongoDB connected: {MONGODB_DATABASE}.{MONGODB_COLLECTION}")
 
