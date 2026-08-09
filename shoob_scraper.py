@@ -367,14 +367,20 @@ def collect_gallery_urls(driver, page_num):
 
 def create_driver():
     options = uc.ChromeOptions()
-    options.headless = HEADLESS
+
     if HEADLESS:
         options.add_argument("--headless=new")
+
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    return uc.Chrome(options=options)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    return uc.Chrome(
+        options=options,
+        version_main=150
+    )
 
 
 def scrape_shoob_two_step():
