@@ -1,0 +1,47 @@
+name: Shoob Scraper
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DATABASE: shoob
+          MONGODB_COLLECTION: cards
+          MONGODB_STATE_COLLECTION: scraper_state
+          BASE_URL: https://shoob.gg/cards?page=
+          START_PAGE: 1
+          END_PAGE: 2403
+          PAGE_LOAD_TIMEOUT: 20
+          GALLERY_WAIT: 4
+          DETAIL_WAIT: 15
+          DETAIL_EXTRA_WAIT: 1
+          HEADLESS: true
+          SKIP_EXISTING: true
+          RESET_PROGRESS: false
+        run: python shoob_scraper.py
