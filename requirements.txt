@@ -3,3 +3,4 @@ pymongo
 python-dotenv
 selenium
 undetected-chromedriver
+setuptools>=68
