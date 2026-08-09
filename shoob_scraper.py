@@ -379,7 +379,7 @@ def create_driver():
 
     return uc.Chrome(
         options=options,
-        version_main=150
+        version_main=151
     )
 
 
