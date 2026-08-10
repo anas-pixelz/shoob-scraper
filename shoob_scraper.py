@@ -1353,10 +1353,15 @@ def scrape_shoob_two_step():
         # GALLERY PAGINATION
         # ====================================================
 
-        for page_num in range(
-            start_page,
-            END_PAGE + 1
-        ):
+        fbatch_end = min(
+    start_page + BATCH_SIZE - 1,
+    END_PAGE
+)
+
+for page_num in range(
+    start_page,
+    batch_end + 1
+):
 
             print(
                 "\n"
