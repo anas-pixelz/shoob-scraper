@@ -43,8 +43,8 @@ jobs:
           MONGODB_COLLECTION: cards
           MONGODB_STATE_COLLECTION: scraper_state
           BASE_URL: https://shoob.gg/cards?page=
-          START_PAGE: 1
-          END_PAGE: 2403
+          START_PAGE: 35
+          END_PAGE: 69
           PAGE_LOAD_TIMEOUT: 20
           GALLERY_WAIT: 4
           DETAIL_WAIT: 15
