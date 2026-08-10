@@ -49,10 +49,10 @@ jobs:
 
           # Initial starting point.
           # After this, MongoDB controls the resume position.
-          START_PAGE: 70
+          START_PAGE: 1
 
           # Maximum page.
-          END_PAGE: 2403
+          END_PAGE: 2404
 
           # IMPORTANT:
           # Only process 30 pages during this run.
