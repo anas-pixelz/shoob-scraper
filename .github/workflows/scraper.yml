@@ -2,17 +2,42 @@ name: Shoob Scraper
 
 on:
   workflow_dispatch:
+
+  # Run automatically every 30 minutes.
+  # Each run processes one batch and then exits.
   schedule:
-    - cron: "0 */6 * * *"
+  - cron: "0,30 * * * *"
+
+
+# Prevent two scraper instances from
+# running against MongoDB at the same time.
+concurrency:
+  group: shoob-scraper
+  cancel-in-progress: false
+
 
 jobs:
+
   scrape:
+
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+
+    # Prevent a single batch from running forever.
+    timeout-minutes: 110
 
     steps:
-      - name: Checkout
+
+      # ======================================================
+      # CHECKOUT
+      # ======================================================
+
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # ======================================================
+      # PYTHON
+      # ======================================================
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -20,36 +45,68 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Chromium
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
+      # ======================================================
+      # DEPENDENCIES
+      # ======================================================
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip setuptools wheel
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+
+
+      # ======================================================
+      # CHROME VERSION
+      # ======================================================
 
       - name: Check Chrome version
         run: |
-         google-chrome --version || true
-         chromium --version || true
+          echo "Installed Chrome:"
+          google-chrome --version || true
 
-      - name: Run scraper
+          echo "Installed Chromium:"
+          chromium --version || true
+
+
+      # ======================================================
+      # RUN SCRAPER
+      # ======================================================
+
+      - name: Run Shoob scraper
         env:
+
+          # MongoDB
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          MONGODB_DATABASE: shoob
-          MONGODB_COLLECTION: cards
-          MONGODB_STATE_COLLECTION: scraper_state
-          BASE_URL: https://shoob.gg/cards?page=
-          START_PAGE: 35
-          END_PAGE: 69
-          PAGE_LOAD_TIMEOUT: 20
-          GALLERY_WAIT: 4
-          DETAIL_WAIT: 15
-          DETAIL_EXTRA_WAIT: 1
-          HEADLESS: true
-          SKIP_EXISTING: true
-          RESET_PROGRESS: false
-        run: python shoob_scraper.py
+
+          MONGODB_DATABASE: ${{ secrets.MONGODB_DATABASE }}
+
+          MONGODB_COLLECTION: ${{ secrets.MONGODB_COLLECTION }}
+
+          # Scraper
+          BASE_URL: "https://shoob.gg/cards?page="
+
+          START_PAGE: "70"
+
+          MAX_PAGE: "2404"
+
+          BATCH_SIZE: "30"
+
+          PAGE_LOAD_TIMEOUT: "20"
+
+          GALLERY_WAIT: "4"
+
+          DETAIL_WAIT: "15"
+
+          DETAIL_EXTRA_WAIT: "1"
+
+          HEADLESS: "true"
+
+          SKIP_EXISTING: "true"
+
+          MONGODB_STATE_COLLECTION: "scraper_state"
+
+          RESET_PROGRESS: "false"
+
+        run: |
+          python shoob_scraper.py
