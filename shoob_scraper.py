@@ -8,10 +8,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
-from selenium.common.exceptions import (
-    TimeoutException,
-    WebDriverException,
-)
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -23,32 +20,21 @@ from selenium.webdriver.support.ui import WebDriverWait
 load_dotenv()
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 BASE_URL = os.getenv(
     "BASE_URL",
     "https://shoob.gg/cards?page="
 )
 
-# First page if no MongoDB progress exists.
 START_PAGE = int(
-    os.getenv("START_PAGE", "2")
+    os.getenv("START_PAGE", "1")
 )
 
-# Absolute final page.
-MAX_PAGE = int(
-    os.getenv("MAX_PAGE", "2403")
-)
-
-# Number of gallery pages handled by ONE GitHub Actions run.
-BATCH_SIZE = int(
-    os.getenv("BATCH_SIZE", "50")
+END_PAGE = int(
+    os.getenv("END_PAGE", "2404")
 )
 
 PAGE_LOAD_TIMEOUT = int(
-    os.getenv("PAGE_LOAD_TIMEOUT", "20")
+    os.getenv("PAGE_LOAD_TIMEOUT", "30")
 )
 
 GALLERY_WAIT = float(
@@ -56,7 +42,7 @@ GALLERY_WAIT = float(
 )
 
 DETAIL_WAIT = int(
-    os.getenv("DETAIL_WAIT", "15")
+    os.getenv("DETAIL_WAIT", "20")
 )
 
 DETAIL_EXTRA_WAIT = float(
@@ -64,29 +50,19 @@ DETAIL_EXTRA_WAIT = float(
 )
 
 HEADLESS = (
-    os.getenv(
-        "HEADLESS",
-        "true"
-    ).lower()
-    == "true"
+    os.getenv("HEADLESS", "true").lower() == "true"
 )
 
 SKIP_EXISTING = (
-    os.getenv(
-        "SKIP_EXISTING",
-        "true"
-    ).lower()
-    == "true"
+    os.getenv("SKIP_EXISTING", "true").lower() == "true"
 )
 
 
 # ============================================================
-# MONGODB CONFIGURATION
+# MONGODB
 # ============================================================
 
-MONGODB_URI = os.getenv(
-    "MONGODB_URI"
-)
+MONGODB_URI = os.getenv("MONGODB_URI")
 
 MONGODB_DATABASE = os.getenv(
     "MONGODB_DATABASE",
@@ -110,78 +86,108 @@ if not MONGODB_URI:
     )
 
 
-# ============================================================
-# GLOBAL CONNECTIONS
-# ============================================================
-
 mongo_client = None
 cards_collection = None
 state_collection = None
 
 
 # ============================================================
-# TIME
+# HELPERS
 # ============================================================
 
 def now_utc():
-    return datetime.now(
-        timezone.utc
-    )
+    return datetime.now(timezone.utc)
 
-
-# ============================================================
-# TEXT HELPERS
-# ============================================================
 
 def clean_text(value):
-
     return " ".join(
         str(value or "").split()
     ).strip()
 
 
 def normalize_url(url):
-
     if not url:
         return None
 
-    url = url.strip()
+    url = str(url).strip()
+
+    if not url:
+        return None
 
     if url.startswith("//"):
         return "https:" + url
 
     if url.startswith("/"):
-        return (
-            "https://shoob.gg"
-            + url
-        )
+        return "https://shoob.gg" + url
 
     return url
 
 
+def is_card_media_url(url):
+    """
+    Checks whether a URL looks like a Shoob card asset.
+    """
+
+    if not url:
+        return False
+
+    url = normalize_url(url)
+
+    if not url:
+        return False
+
+    lower = url.lower()
+
+    if "shoob_logo" in lower:
+        return False
+
+    if "/images/cards/" not in lower:
+        return False
+
+    return True
+
+
+def is_invalid_card_name(name):
+    if not name:
+        return True
+
+    value = clean_text(name).lower()
+
+    invalid_names = {
+        "",
+        "creators",
+        "creator",
+        "cards",
+        "card",
+        "unknown",
+        "unknown card",
+        "navigation menu",
+        "menu",
+    }
+
+    return value in invalid_names
+
+
 # ============================================================
-# MONGODB
+# MONGODB CONNECTION
 # ============================================================
 
 def connect_mongodb():
-
     global mongo_client
     global cards_collection
     global state_collection
 
-    print(
-        "\n[!] Connecting to MongoDB..."
-    )
+    print("\n[!] Connecting to MongoDB...")
 
     mongo_client = MongoClient(
         MONGODB_URI,
-        serverSelectionTimeoutMS=15000
+        serverSelectionTimeoutMS=15000,
+        connectTimeoutMS=15000,
+        socketTimeoutMS=30000,
     )
 
-    # Force connection test.
-    mongo_client.admin.command(
-        "ping"
-    )
+    # Force connection test
+    mongo_client.admin.command("ping")
 
     db = mongo_client[
         MONGODB_DATABASE
@@ -195,10 +201,9 @@ def connect_mongodb():
         MONGODB_STATE_COLLECTION
     ]
 
-    # --------------------------------------------------------
-    # Card indexes
-    # --------------------------------------------------------
-
+    # IMPORTANT:
+    # Do NOT create a unique index on _id.
+    # MongoDB automatically manages _id.
     cards_collection.create_index(
         "source_url",
         unique=True
@@ -216,13 +221,13 @@ def connect_mongodb():
         "tier"
     )
 
-    # DO NOT create an explicit _id index.
-    # MongoDB automatically creates the unique _id index.
+    cards_collection.create_index(
+        "media_type"
+    )
 
     print(
         f"[+] MongoDB connected: "
-        f"{MONGODB_DATABASE}."
-        f"{MONGODB_COLLECTION}"
+        f"{MONGODB_DATABASE}.{MONGODB_COLLECTION}"
     )
 
 
@@ -230,34 +235,20 @@ def connect_mongodb():
 # SCRAPER STATE
 # ============================================================
 
-STATE_ID = "shoob_scraper"
-
-
 def get_state():
 
     state = state_collection.find_one(
-        {
-            "_id": STATE_ID
-        }
+        {"_id": "shoob_scraper"}
     )
 
     if state:
         return state
 
-    initial_state = {
-        "_id": STATE_ID,
+    return {
         "next_page": START_PAGE,
         "last_completed_page": START_PAGE - 1,
-        "max_page": MAX_PAGE,
-        "status": "not_started",
-        "updated_at": now_utc(),
+        "status": "new",
     }
-
-    state_collection.insert_one(
-        initial_state
-    )
-
-    return initial_state
 
 
 def save_state(
@@ -267,60 +258,21 @@ def save_state(
 ):
 
     state_collection.update_one(
-        {
-            "_id": STATE_ID
-        },
+        {"_id": "shoob_scraper"},
         {
             "$set": {
                 "next_page": next_page,
-                "last_completed_page":
-                    last_completed_page,
-                "max_page": MAX_PAGE,
+                "last_completed_page": last_completed_page,
                 "status": status,
                 "updated_at": now_utc(),
             }
         },
-        upsert=True
+        upsert=True,
     )
 
 
 # ============================================================
-# CALCULATE CURRENT BATCH
-# ============================================================
-
-def calculate_batch():
-
-    state = get_state()
-
-    next_page = int(
-        state.get(
-            "next_page",
-            START_PAGE
-        )
-    )
-
-    # Everything is already finished.
-    if next_page > MAX_PAGE:
-
-        return None, None
-
-    batch_start = next_page
-
-    batch_end = min(
-        batch_start
-        + BATCH_SIZE
-        - 1,
-        MAX_PAGE
-    )
-
-    return (
-        batch_start,
-        batch_end
-    )
-
-
-# ============================================================
-# TIER
+# TIER EXTRACTION
 # ============================================================
 
 def extract_tier(text):
@@ -330,6 +282,7 @@ def extract_tier(text):
     if not text:
         return None
 
+    # T4
     match = re.search(
         r"\bT(\d+)\b",
         text,
@@ -337,10 +290,9 @@ def extract_tier(text):
     )
 
     if match:
-        return (
-            f"T{match.group(1)}"
-        )
+        return f"T{match.group(1)}"
 
+    # Tier 4
     match = re.search(
         r"\bTier\s*(\d+)\b",
         text,
@@ -348,30 +300,53 @@ def extract_tier(text):
     )
 
     if match:
-        return (
-            f"T{match.group(1)}"
-        )
+        return f"T{match.group(1)}"
 
     return None
 
 
 # ============================================================
-# CARD TITLE
+# TITLE EXTRACTION
 # ============================================================
 
 def get_title(soup):
 
+    """
+    Shoob has a generic "Creators" heading.
+
+    We therefore deliberately reject "Creators"
+    and search for the actual card heading.
+    """
+
     selectors = [
+
+        # Current Shoob card heading
         "div.text-xl.font-bold.text-center.mt-4",
+
+        # Slightly more general versions
         "div.text-xl.font-bold.text-center",
+
         "div.text-xl.font-bold",
+
+        # Common heading possibilities
+        "h1.text-xl.font-bold",
+
+        "h1.text-center",
+
+        "h1",
+
+        "h2",
+
+        "h3",
     ]
 
     for selector in selectors:
 
-        for element in soup.select(
+        elements = soup.select(
             selector
-        ):
+        )
+
+        for element in elements:
 
             title = clean_text(
                 element.get_text(
@@ -380,43 +355,22 @@ def get_title(soup):
                 )
             )
 
-            if (
-                title
-                and title.lower()
-                != "creators"
-            ):
+            if not title:
+                continue
+
+            if is_invalid_card_name(title):
+                continue
+
+            # Prefer something containing a tier
+            if extract_tier(title):
                 return title
 
-    # Heading fallback.
+    # --------------------------------------------------------
+    # SECONDARY SEARCH
+    # --------------------------------------------------------
+
     for element in soup.find_all(
-        [
-            "h1",
-            "h2",
-            "h3"
-        ]
-    ):
-
-        title = clean_text(
-            element.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        if (
-            title
-            and title.lower()
-            != "creators"
-            and extract_tier(title)
-        ):
-            return title
-
-    # Final tier-based fallback.
-    for element in soup.find_all(
-        [
-            "div",
-            "span"
-        ]
+        ["div", "span"]
     ):
 
         text = clean_text(
@@ -426,16 +380,28 @@ def get_title(soup):
             )
         )
 
-        if (
-            text
-            and len(text) < 200
-            and extract_tier(text)
-            and text.lower()
-            not in {
-                "creators",
+        if not text:
+            continue
+
+        if len(text) > 200:
+            continue
+
+        if is_invalid_card_name(text):
+            continue
+
+        if extract_tier(text):
+
+            # Don't accidentally select navigation
+            lower = text.lower()
+
+            if lower in {
                 "cards",
-            }
-        ):
+                "tier",
+                "navigation menu",
+                "creators",
+            }:
+                continue
+
             return text
 
     return None
@@ -452,27 +418,31 @@ def parse_name_and_tier(title):
     if not title:
         return None, None
 
-    tier = extract_tier(
-        title
-    )
+    tier = extract_tier(title)
 
     name = title
 
     if tier:
+
+        # Example:
+        # Kakashi & Obito - T4
 
         name = re.sub(
             rf"\s*(?:-|\||:)\s*"
             rf"{re.escape(tier)}\s*$",
             "",
             name,
-            flags=re.I
+            flags=re.I,
         ).strip()
+
+        # Example:
+        # Kakashi & Obito T4
 
         name = re.sub(
             rf"\s+{re.escape(tier)}\s*$",
             "",
             name,
-            flags=re.I
+            flags=re.I,
         ).strip()
 
     return (
@@ -488,10 +458,15 @@ def parse_name_and_tier(title):
 def get_breadcrumb_items(soup):
 
     selectors = [
+
         "ol.breadcrumb-new",
+
         ".breadcrumb-new",
+
         ".breadcrumb",
+
         "nav[aria-label='breadcrumb']",
+
     ]
 
     breadcrumb = None
@@ -514,44 +489,40 @@ def get_breadcrumb_items(soup):
 
     if items:
 
-        result = [
-            clean_text(
+        result = []
+
+        for item in items:
+
+            text = clean_text(
                 item.get_text(
                     " ",
                     strip=True
                 )
             )
-            for item in items
-        ]
 
-        return [
-            item
-            for item in result
-            if item
-        ]
+            if text:
+                result.append(text)
 
-    result = [
-        clean_text(
+        return result
+
+    result = []
+
+    for item in breadcrumb.find_all(
+        "a"
+    ):
+
+        text = clean_text(
             item.get_text(
                 " ",
                 strip=True
             )
         )
-        for item in breadcrumb.find_all(
-            "a"
-        )
-    ]
 
-    return [
-        item
-        for item in result
-        if item
-    ]
+        if text:
+            result.append(text)
 
+    return result
 
-# ============================================================
-# SERIES + TIER
-# ============================================================
 
 def extract_series_and_tier(soup):
 
@@ -565,9 +536,11 @@ def extract_series_and_tier(soup):
     tier = None
     tier_index = None
 
-    for index, item in enumerate(
-        items
-    ):
+    # --------------------------------------------------------
+    # FIND TIER
+    # --------------------------------------------------------
+
+    for index, item in enumerate(items):
 
         detected = extract_tier(
             item
@@ -576,27 +549,31 @@ def extract_series_and_tier(soup):
         if detected:
 
             tier = detected
+
             tier_index = index
 
             break
+
+    # --------------------------------------------------------
+    # FIND SERIES
+    # --------------------------------------------------------
 
     series = None
 
     if (
         tier_index is not None
-        and tier_index + 1
-        < len(items)
+        and tier_index + 1 < len(items)
     ):
 
-        candidate = items[
-            tier_index + 1
-        ]
+        candidate = clean_text(
+            items[tier_index + 1]
+        )
 
         if (
             candidate.lower()
             not in {
                 "cards",
-                "card"
+                "card",
             }
             and not extract_tier(
                 candidate
@@ -605,18 +582,21 @@ def extract_series_and_tier(soup):
 
             series = candidate
 
-    if (
-        not series
-        and len(items) >= 2
-    ):
+    # --------------------------------------------------------
+    # FALLBACK
+    # --------------------------------------------------------
 
-        candidate = items[-2]
+    if not series and len(items) >= 2:
+
+        candidate = clean_text(
+            items[-2]
+        )
 
         if (
             candidate.lower()
             not in {
                 "cards",
-                "card"
+                "card",
             }
             and not extract_tier(
                 candidate
@@ -629,55 +609,173 @@ def extract_series_and_tier(soup):
         clean_text(series)
         if series
         else None,
-        tier
+        tier,
     )
 
 
 # ============================================================
-# CARD IMAGE
+# MEDIA EXTRACTION
 # ============================================================
 
-def get_card_image(soup):
+def extract_from_element(
+    element,
+    attributes
+):
 
-    selectors = [
-        "img[src*='/images/cards/']",
-        "img[data-src*='/images/cards/']",
-        "img[data-lazy-src*='/images/cards/']",
-        "img[data-original*='/images/cards/']",
-    ]
+    for attr in attributes:
 
-    for selector in selectors:
+        value = element.get(
+            attr
+        )
 
-        for img in soup.select(
-            selector
+        if not value:
+            continue
+
+        url = normalize_url(
+            value
+        )
+
+        if not url:
+            continue
+
+        if is_card_media_url(
+            url
         ):
-
-            for attr in (
-                "src",
-                "data-src",
-                "data-lazy-src",
-                "data-original",
-            ):
-
-                url = normalize_url(
-                    img.get(attr)
-                )
-
-                if not url:
-                    continue
-
-                lower = url.lower()
-
-                if "shoob_logo" in lower:
-                    continue
-
-                if (
-                    "/images/cards/"
-                    in lower
-                ):
-                    return url
+            return url
 
     return None
+
+
+def get_card_media(soup):
+
+    """
+    Returns:
+
+        {
+            "media_url": "...",
+            "media_type": "image"
+        }
+
+    OR
+
+        {
+            "media_url": "...",
+            "media_type": "video"
+        }
+
+    """
+
+    # ========================================================
+    # 1. VIDEO
+    # ========================================================
+
+    video_selectors = [
+
+        "video[src*='/images/cards/']",
+
+        "video source[src*='/images/cards/']",
+
+        "video",
+
+        "source",
+
+    ]
+
+    for selector in video_selectors:
+
+        elements = soup.select(
+            selector
+        )
+
+        for element in elements:
+
+            url = extract_from_element(
+                element,
+                (
+                    "src",
+                    "data-src",
+                    "data-video",
+                    "data-url",
+                ),
+            )
+
+            if url:
+
+                return {
+                    "media_url": url,
+                    "media_type": "video",
+                }
+
+    # ========================================================
+    # 2. IMAGE
+    # ========================================================
+
+    image_selectors = [
+
+        "img[src*='/images/cards/']",
+
+        "img[data-src*='/images/cards/']",
+
+        "img[data-lazy-src*='/images/cards/']",
+
+        "img[data-original*='/images/cards/']",
+
+        "img",
+
+    ]
+
+    for selector in image_selectors:
+
+        elements = soup.select(
+            selector
+        )
+
+        for element in elements:
+
+            url = extract_from_element(
+                element,
+                (
+                    "src",
+                    "data-src",
+                    "data-lazy-src",
+                    "data-original",
+                ),
+            )
+
+            if url:
+
+                return {
+                    "media_url": url,
+                    "media_type": "image",
+                }
+
+    return None
+
+
+# ============================================================
+# VALIDATE MEDIA
+# ============================================================
+
+def validate_media(
+    media_url,
+    media_type
+):
+
+    if not media_url:
+        return False
+
+    if not is_card_media_url(
+        media_url
+    ):
+        return False
+
+    if media_type not in {
+        "image",
+        "video",
+    }:
+        return False
+
+    return True
 
 
 # ============================================================
@@ -690,10 +788,6 @@ def validate_card(card):
         card.get("name")
     )
 
-    image = clean_text(
-        card.get("image_url")
-    )
-
     series = clean_text(
         card.get("series")
     )
@@ -702,26 +796,30 @@ def validate_card(card):
         card.get("tier")
     )
 
-    if (
-        not name
-        or name.lower()
-        in {
-            "creators",
-            "unknown",
-            "unknown card",
-        }
+    media_url = clean_text(
+        card.get("media_url")
+    )
+
+    media_type = clean_text(
+        card.get("media_type")
+    )
+
+    source_url = clean_text(
+        card.get("source_url")
+    )
+
+    # --------------------------------------------------------
+    # NAME
+    # --------------------------------------------------------
+
+    if is_invalid_card_name(
+        name
     ):
         return False
 
-    if (
-        not image
-        or "/images/cards/"
-        not in image.lower()
-    ):
-        return False
-
-    if "shoob_logo" in image.lower():
-        return False
+    # --------------------------------------------------------
+    # SERIES
+    # --------------------------------------------------------
 
     if (
         not series
@@ -730,9 +828,33 @@ def validate_card(card):
     ):
         return False
 
+    # --------------------------------------------------------
+    # TIER
+    # --------------------------------------------------------
+
     if (
         not tier
         or not extract_tier(tier)
+    ):
+        return False
+
+    # --------------------------------------------------------
+    # MEDIA
+    # --------------------------------------------------------
+
+    if not validate_media(
+        media_url,
+        media_type
+    ):
+        return False
+
+    # --------------------------------------------------------
+    # SOURCE URL
+    # --------------------------------------------------------
+
+    if (
+        not source_url
+        or "/cards/info/" not in source_url
     ):
         return False
 
@@ -740,33 +862,54 @@ def validate_card(card):
 
 
 # ============================================================
-# WAIT FOR DETAIL PAGE
+# DETAIL PAGE WAIT
 # ============================================================
 
-def wait_for_detail_page(driver):
+def wait_for_detail_page(
+    driver
+):
 
     wait = WebDriverWait(
         driver,
         DETAIL_WAIT
     )
 
+    selectors = [
+
+        # Images
+        "img[src*='/images/cards/']",
+
+        "img[data-src*='/images/cards/']",
+
+        "img[data-lazy-src*='/images/cards/']",
+
+        # Videos
+        "video[src*='/images/cards/']",
+
+        "video",
+
+        "video source[src*='/images/cards/']",
+
+    ]
+
     try:
 
         wait.until(
             lambda d:
-            d.find_elements(
-                By.CSS_SELECTOR,
-                "img[src*='/images/cards/']"
-            )
-            or
-            d.find_elements(
-                By.CSS_SELECTOR,
-                "img[data-src*='/images/cards/']"
-            )
+                any(
+                    d.find_elements(
+                        By.CSS_SELECTOR,
+                        selector
+                    )
+                    for selector
+                    in selectors
+                )
         )
 
     except TimeoutException:
 
+        # We don't immediately fail.
+        # The DOM may still contain the media.
         pass
 
     time.sleep(
@@ -775,7 +918,7 @@ def wait_for_detail_page(driver):
 
 
 # ============================================================
-# SCRAPE DETAIL PAGE
+# SCRAPE ONE CARD
 # ============================================================
 
 def scrape_card_detail(
@@ -785,24 +928,39 @@ def scrape_card_detail(
 
     driver.get(url)
 
-    if (
-        "/cards/info/"
-        not in driver.current_url
-    ):
+    # --------------------------------------------------------
+    # VERIFY URL
+    # --------------------------------------------------------
+
+    current_url = driver.current_url
+
+    if "/cards/info/" not in current_url:
 
         raise ValueError(
-            "Unexpected detail URL: "
-            f"{driver.current_url}"
+            f"Unexpected detail URL: "
+            f"{current_url}"
         )
+
+    # --------------------------------------------------------
+    # WAIT FOR RENDER
+    # --------------------------------------------------------
 
     wait_for_detail_page(
         driver
     )
 
+    # --------------------------------------------------------
+    # PARSE DOM
+    # --------------------------------------------------------
+
     soup = BeautifulSoup(
         driver.page_source,
         "html.parser"
     )
+
+    # --------------------------------------------------------
+    # TITLE
+    # --------------------------------------------------------
 
     title = get_title(
         soup
@@ -812,12 +970,16 @@ def scrape_card_detail(
 
         raise ValueError(
             "Could not find real card "
-            f"title at {driver.current_url}"
+            f"title at {current_url}"
         )
 
     print(
         f"   Found title: {title}"
     )
+
+    # --------------------------------------------------------
+    # NAME + TIER
+    # --------------------------------------------------------
 
     name, title_tier = (
         parse_name_and_tier(
@@ -825,10 +987,15 @@ def scrape_card_detail(
         )
     )
 
-    series, breadcrumb_tier = (
-        extract_series_and_tier(
-            soup
-        )
+    # --------------------------------------------------------
+    # SERIES + TIER
+    # --------------------------------------------------------
+
+    (
+        series,
+        breadcrumb_tier,
+    ) = extract_series_and_tier(
+        soup
     )
 
     tier = (
@@ -836,18 +1003,52 @@ def scrape_card_detail(
         or breadcrumb_tier
     )
 
-    image_url = get_card_image(
+    # --------------------------------------------------------
+    # MEDIA
+    # --------------------------------------------------------
+
+    media = get_card_media(
         soup
     )
 
+    if not media:
+
+        raise ValueError(
+            "No valid card media found "
+            f"at {current_url}"
+        )
+
+    media_url = media[
+        "media_url"
+    ]
+
+    media_type = media[
+        "media_type"
+    ]
+
+    # --------------------------------------------------------
+    # CARD OBJECT
+    # --------------------------------------------------------
+
     card = {
+
         "name": name,
+
         "series": series,
+
         "tier": tier,
-        "image_url": image_url,
-        "source_url":
-            driver.current_url,
+
+        "media_url": media_url,
+
+        "media_type": media_type,
+
+        "source_url": current_url,
+
     }
+
+    # --------------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------------
 
     if not validate_card(
         card
@@ -865,7 +1066,9 @@ def scrape_card_detail(
 # CHECK EXISTING CARD
 # ============================================================
 
-def card_exists(source_url):
+def card_exists(
+    source_url
+):
 
     if not SKIP_EXISTING:
         return False
@@ -878,7 +1081,7 @@ def card_exists(source_url):
             },
             {
                 "_id": 1
-            }
+            },
         )
         is not None
     )
@@ -891,44 +1094,62 @@ def card_exists(source_url):
 def save_card(card):
 
     result = cards_collection.update_one(
+
         {
             "source_url":
                 card["source_url"]
         },
+
         {
             "$set": {
+
                 "name":
                     card["name"],
+
                 "series":
                     card["series"],
+
                 "tier":
                     card["tier"],
-                "image_url":
-                    card["image_url"],
+
+                "media_url":
+                    card["media_url"],
+
+                "media_type":
+                    card["media_type"],
+
                 "updated_at":
                     now_utc(),
+
             },
+
             "$setOnInsert": {
+
                 "source_url":
                     card["source_url"],
+
                 "created_at":
                     now_utc(),
+
             },
         },
-        upsert=True
+
+        upsert=True,
     )
 
     if result.upserted_id:
+
         return "inserted"
 
     if result.modified_count:
+
         return "updated"
 
     return "unchanged"
 
 
 # ============================================================
-# COLLECT GALLERY URLS
+# COLLECT CARD URLS FROM GALLERY
 # ============================================================
 
 def collect_gallery_urls(
@@ -954,6 +1175,7 @@ def collect_gallery_urls(
     )
 
     urls = []
+
     seen = set()
 
     for link in links:
@@ -975,14 +1197,17 @@ def collect_gallery_urls(
             href
         )
 
+        if not href:
+            continue
+
         if (
-            href
-            and "/cards/info/"
-            in href
+            "/cards/info/" in href
             and href not in seen
         ):
 
-            seen.add(href)
+            seen.add(
+                href
+            )
 
             urls.append(
                 href
@@ -992,12 +1217,14 @@ def collect_gallery_urls(
 
 
 # ============================================================
-# CHROME DRIVER
+# CREATE CHROME DRIVER
 # ============================================================
 
 def create_driver():
 
     options = uc.ChromeOptions()
+
+    options.headless = HEADLESS
 
     if HEADLESS:
 
@@ -1025,91 +1252,93 @@ def create_driver():
         "--disable-blink-features=AutomationControlled"
     )
 
-    # GitHub Actions currently has Chrome 150.
-    # This prevents undetected_chromedriver
-    # from selecting ChromeDriver 151.
-    return uc.Chrome(
-        options=options,
-        version_main=150
+    options.add_argument(
+        "--disable-extensions"
     )
 
+    options.add_argument(
+        "--disable-popup-blocking"
+    )
+
+    options.add_argument(
+        "--disable-notifications"
+    )
+
+    return uc.Chrome(
+    options=options,
+    version_main=150
+)
 
 # ============================================================
-# MAIN SCRAPER
+# MAIN TWO-STEP SCRAPER
 # ============================================================
 
 def scrape_shoob_two_step():
 
     connect_mongodb()
 
-    # --------------------------------------------------------
-    # Determine automatic batch.
-    # --------------------------------------------------------
+    # ========================================================
+    # RESUME STATE
+    # ========================================================
 
-    start_page, end_page = (
-        calculate_batch()
+    state = get_state()
+
+    requested_start = START_PAGE
+
+    saved_next_page = int(
+        state.get(
+            "next_page",
+            requested_start
+        )
     )
 
-    if start_page is None:
+    # Never go backwards accidentally
+    start_page = max(
+        requested_start,
+        saved_next_page
+    )
+
+    if start_page > END_PAGE:
 
         print(
-            "\n[+] ALL PAGES HAVE BEEN SCRAPED."
+            f"[+] No pending pages. "
+            f"Resume state says "
+            f"next_page={start_page}."
         )
 
         print(
-            f"[+] Maximum page: "
-            f"{MAX_PAGE}"
+            "[+] Set "
+            "RESET_PROGRESS=true "
+            "for a fresh full scan."
         )
 
         return
 
-    print(
-        "\n"
-        + "=" * 60
-    )
-
-    print(
-        "          AUTOMATIC SCRAPE BATCH"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        f"Starting page : {start_page}"
-    )
-
-    print(
-        f"Ending page   : {end_page}"
-    )
-
-    print(
-        f"Batch size    : "
-        f"{end_page - start_page + 1}"
-    )
-
-    print(
-        f"Maximum page  : {MAX_PAGE}"
-    )
-
-    print(
-        "=" * 60
-    )
+    # ========================================================
+    # COUNTERS
+    # ========================================================
 
     driver = None
 
     successful_pages = []
+
     empty_pages = []
+
     timeout_pages = []
 
     inserted = 0
+
     updated = 0
+
     unchanged = 0
+
     failed = 0
+
     skipped = 0
 
-    batch_completed = True
+    # ========================================================
+    # RUN
+    # ========================================================
 
     try:
 
@@ -1121,18 +1350,41 @@ def scrape_shoob_two_step():
 
         # ====================================================
         # STEP 1
-        # GALLERY PAGES
+        # GALLERY PAGINATION
         # ====================================================
 
         for page_num in range(
             start_page,
-            end_page + 1
+            END_PAGE + 1
         ):
 
             print(
-                f"\n[!] Scanning Gallery "
-                f"Page {page_num}..."
+                "\n"
+                + "=" * 60
             )
+
+            print(
+                f"[!] Scanning Gallery "
+                f"Page {page_num}/{END_PAGE}"
+            )
+
+            print(
+                "=" * 60
+            )
+
+            # Save current page before processing.
+            # If GitHub Actions dies here, this page
+            # will be retried on the next run.
+
+            save_state(
+                page_num,
+                page_num - 1,
+                "running"
+            )
+
+            # =================================================
+            # GET GALLERY
+            # =================================================
 
             try:
 
@@ -1146,38 +1398,38 @@ def scrape_shoob_two_step():
             except TimeoutException:
 
                 print(
-                    f"--> [TIMEOUT] Gallery "
-                    f"page {page_num} "
-                    f"timed out."
+                    f"--> [TIMEOUT] "
+                    f"Gallery page "
+                    f"{page_num} timed out."
                 )
 
                 timeout_pages.append(
                     page_num
                 )
 
-                # Do NOT advance state.
-                # This page will be retried
-                # on the next GitHub run.
-
-                batch_completed = False
-
-                break
+                continue
 
             except WebDriverException as error:
 
                 print(
-                    f"--> [ERROR] Gallery "
+                    f"--> [ERROR] "
+                    f"Gallery page "
+                    f"{page_num}: "
+                    f"{error}"
+                )
+
+                continue
+
+            except Exception as error:
+
+                print(
+                    f"--> [ERROR] "
+                    f"Could not scan gallery "
                     f"page {page_num}: "
                     f"{error}"
                 )
 
-                timeout_pages.append(
-                    page_num
-                )
-
-                batch_completed = False
-
-                break
+                continue
 
             # =================================================
             # EMPTY PAGE
@@ -1195,20 +1447,11 @@ def scrape_shoob_two_step():
                     page_num
                 )
 
-                # Treat empty page as completed.
-                # Otherwise scraper could get
-                # permanently stuck on it.
-
+                # We still mark this page completed.
                 save_state(
                     page_num + 1,
                     page_num,
                     "running"
-                )
-
-                print(
-                    f"[+] Progress saved. "
-                    f"Next page: "
-                    f"{page_num + 1}"
                 )
 
                 continue
@@ -1218,15 +1461,14 @@ def scrape_shoob_two_step():
             )
 
             print(
-                f"Found "
-                f"{len(card_urls)} "
+                f"Found {len(card_urls)} "
                 f"card pages to inspect "
                 f"on Page {page_num}."
             )
 
             # =================================================
             # STEP 2
-            # DETAIL PAGES
+            # CARD DETAILS
             # =================================================
 
             for idx, url in enumerate(
@@ -1237,10 +1479,10 @@ def scrape_shoob_two_step():
                 try:
 
                     print(
-                        f"\n   Navigating "
-                        f"to details "
-                        f"({idx}/"
-                        f"{len(card_urls)})..."
+                        "\n"
+                        f"   Navigating to "
+                        f"details "
+                        f"({idx}/{len(card_urls)})..."
                     )
 
                     print(
@@ -1248,7 +1490,7 @@ def scrape_shoob_two_step():
                     )
 
                     # -----------------------------------------
-                    # Existing card
+                    # SKIP EXISTING
                     # -----------------------------------------
 
                     if card_exists(
@@ -1266,7 +1508,7 @@ def scrape_shoob_two_step():
                         continue
 
                     # -----------------------------------------
-                    # Scrape
+                    # SCRAPE DETAIL
                     # -----------------------------------------
 
                     card = (
@@ -1276,23 +1518,29 @@ def scrape_shoob_two_step():
                         )
                     )
 
+                    # -----------------------------------------
+                    # LOG DATA
+                    # -----------------------------------------
+
                     print(
                         f"   Extracted - "
-                        f"Name: "
-                        f"{card['name']}, "
-                        f"Series: "
-                        f"{card['series']}, "
-                        f"Tier: "
-                        f"{card['tier']}"
+                        f"Name: {card['name']}, "
+                        f"Series: {card['series']}, "
+                        f"Tier: {card['tier']}"
                     )
 
                     print(
-                        f"   Image: "
-                        f"{card['image_url']}"
+                        f"   Media Type: "
+                        f"{card['media_type']}"
+                    )
+
+                    print(
+                        f"   Media URL: "
+                        f"{card['media_url']}"
                     )
 
                     # -----------------------------------------
-                    # Save immediately
+                    # SAVE
                     # -----------------------------------------
 
                     result = save_card(
@@ -1316,6 +1564,10 @@ def scrape_shoob_two_step():
                         f"{result}."
                     )
 
+                # ---------------------------------------------
+                # DETAIL TIMEOUT
+                # ---------------------------------------------
+
                 except TimeoutException:
 
                     failed += 1
@@ -1325,27 +1577,35 @@ def scrape_shoob_two_step():
                         "Detail page timed out."
                     )
 
+                # ---------------------------------------------
+                # MONGODB ERROR
+                # ---------------------------------------------
+
                 except PyMongoError as error:
 
                     failed += 1
 
                     print(
-                        f"   [MongoDB ERROR] "
+                        "   [MongoDB ERROR] "
                         f"{error}"
                     )
+
+                # ---------------------------------------------
+                # OTHER ERROR
+                # ---------------------------------------------
 
                 except Exception as error:
 
                     failed += 1
 
                     print(
-                        f"   [Error] "
-                        f"Skipping detail "
-                        f"entry: {error}"
+                        "   [Error] "
+                        "Skipping detail entry: "
+                        f"{error}"
                     )
 
             # =================================================
-            # PAGE COMPLETED
+            # PAGE COMPLETE
             # =================================================
 
             save_state(
@@ -1354,87 +1614,42 @@ def scrape_shoob_two_step():
                 "running"
             )
 
+            total = (
+                cards_collection.count_documents({})
+            )
+
             print(
+                "\n"
                 f"[+] Page {page_num} "
                 f"completed."
             )
 
             print(
-                f"[+] Next page: "
-                f"{page_num + 1}"
-            )
-
-            total = (
-                cards_collection.count_documents(
-                    {}
-                )
-            )
-
-            print(
-                f"Current MongoDB "
+                f"[+] Current MongoDB "
                 f"database size: "
                 f"{total} records."
             )
 
         # ====================================================
-        # BATCH COMPLETED
+        # ALL PAGES COMPLETE
         # ====================================================
 
-        if batch_completed:
+        save_state(
+            END_PAGE + 1,
+            END_PAGE,
+            "completed"
+        )
 
-            state = get_state()
+        print(
+            "\n[+] ALL REQUESTED "
+            "PAGES COMPLETED."
+        )
 
-            next_page = int(
-                state.get(
-                    "next_page",
-                    MAX_PAGE + 1
-                )
-            )
-
-            if next_page > MAX_PAGE:
-
-                save_state(
-                    MAX_PAGE + 1,
-                    MAX_PAGE,
-                    "completed"
-                )
-
-                print(
-                    "\n"
-                    + "=" * 60
-                )
-
-                print(
-                    "       ALL SHOOB PAGES COMPLETED"
-                )
-
-                print(
-                    "=" * 60
-                )
-
-            else:
-
-                save_state(
-                    next_page,
-                    next_page - 1,
-                    "waiting_for_next_run"
-                )
-
-                print(
-                    "\n[+] Batch completed."
-                )
-
-                print(
-                    f"[+] Next GitHub Actions "
-                    f"run will start at "
-                    f"page {next_page}."
-                )
+    # ========================================================
+    # FINAL CLEANUP
+    # ========================================================
 
     finally:
-
-        # ====================================================
-        # CLOSE CHROME
-        # ====================================================
 
         try:
 
@@ -1505,10 +1720,19 @@ def scrape_shoob_two_step():
 
         if cards_collection is not None:
 
-            print(
-                f"MongoDB Total      : "
-                f"{cards_collection.count_documents({})}"
-            )
+            try:
+
+                total = (
+                    cards_collection.count_documents({})
+                )
+
+                print(
+                    f"MongoDB Total      : "
+                    f"{total}"
+                )
+
+            except Exception:
+                pass
 
         print(
             "=" * 60
@@ -1530,44 +1754,14 @@ def scrape_shoob_two_step():
 
 
 # ============================================================
-# RESET PROGRESS
-# ============================================================
-
-def reset_progress():
-
-    connect_mongodb()
-
-    state_collection.delete_one(
-        {
-            "_id": STATE_ID
-        }
-    )
-
-    print(
-        "[+] Scraper progress reset."
-    )
-
-    print(
-        f"[+] Next scrape will begin "
-        f"at page {START_PAGE}."
-    )
-
-    try:
-
-        if mongo_client:
-
-            mongo_client.close()
-
-    except Exception:
-
-        pass
-
-
-# ============================================================
 # ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
+
+    # --------------------------------------------------------
+    # RESET PROGRESS
+    # --------------------------------------------------------
 
     if (
         os.getenv(
@@ -1577,6 +1771,37 @@ if __name__ == "__main__":
         == "true"
     ):
 
-        reset_progress()
+        connect_mongodb()
+
+        state_collection.delete_one(
+            {
+                "_id":
+                    "shoob_scraper"
+            }
+        )
+
+        print(
+            "[+] Scraper progress reset."
+        )
+
+        try:
+
+            if mongo_client:
+
+                mongo_client.close()
+
+        except Exception:
+
+            pass
+
+        mongo_client = None
+
+        cards_collection = None
+
+        state_collection = None
+
+    # --------------------------------------------------------
+    # START SCRAPER
+    # --------------------------------------------------------
 
     scrape_shoob_two_step()
