@@ -1296,7 +1296,7 @@ def create_driver():
     # GitHub Actions currently using Chrome 150
     return uc.Chrome(
         options=options,
-        version_main=150
+        version_main=152
     )
 
 
