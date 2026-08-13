@@ -1299,7 +1299,7 @@ def create_driver():
 
     options = uc.ChromeOptions()
 
-        options.headless = HEADLESS
+    options.headless = HEADLESS
 
             if HEADLESS:
                     options.add_argument("--headless=new")
