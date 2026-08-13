@@ -1251,6 +1251,26 @@ def collect_gallery_urls(
 
 def create_driver():
 
+        options = uc.ChromeOptions()
+
+            options.headless = HEADLESS
+
+                if HEADLESS:
+                        options.add_argument("--headless=new")
+
+                            options.add_argument("--no-sandbox")
+                                options.add_argument("--disable-dev-shm-usage")
+                                    options.add_argument("--disable-gpu")
+                                        options.add_argument("--window-size=1920,1080")
+                                            options.add_argument("--disable-blink-features=AutomationControlled")
+                                                options.add_argument("--disable-extensions")
+                                                    options.add_argument("--disable-popup-blocking")
+                                                        options.add_argument("--disable-notifications")
+
+                                                            # Let undetected_chromedriver automatically detect the browser version
+                                                                return uc.Chrome(options=options)
+                                                                
+
     options = uc.ChromeOptions()
 
     options.headless = HEADLESS
