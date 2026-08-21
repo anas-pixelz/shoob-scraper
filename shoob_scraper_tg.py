@@ -29,7 +29,7 @@ BASE_URL = os.getenv(
 )
 
 START_PAGE = int(
-    os.getenv("START_PAGE", "70")
+    os.getenv("START_PAGE", "1")
 )
 
 END_PAGE = int(
