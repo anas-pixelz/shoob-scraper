@@ -1,11 +1,10 @@
-name: Shoob Scraper TG
+name: Shoob Scraper
 
 on:
   workflow_dispatch:
 
   schedule:
-    # Every hour
-    - cron: "0 * * * *"
+    - cron: "*/20 * * * *"
 
 jobs:
   scrape:
@@ -18,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
-  run: |
+   run: |
     python -m pip install --upgrade pip setuptools
     pip install -r requirements.txt
 
