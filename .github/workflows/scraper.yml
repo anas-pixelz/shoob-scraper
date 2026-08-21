@@ -1,0 +1,73 @@
+name: Shoob Scraper TG
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Every hour
+    - cron: "0 * * * *"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+  run: |
+    python -m pip install --upgrade pip setuptools
+    pip install -r requirements.txt
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            requests \
+            pymongo \
+            python-dotenv \
+            beautifulsoup4 \
+            selenium \
+            undetected-chromedriver
+
+      - name: Run Shoob scraper
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+          MONGODB_DATABASE: shoob
+          MONGODB_COLLECTION: cards
+          MONGODB_STATE_COLLECTION: scraper_state
+
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          BASE_URL: https://shoob.gg/cards?page=
+
+          START_PAGE: 70
+          END_PAGE: 2403
+
+          BATCH_SIZE: 30
+
+          PAGE_LOAD_TIMEOUT: 30
+          GALLERY_WAIT: 4
+          DETAIL_WAIT: 20
+          DETAIL_EXTRA_WAIT: 1
+
+          TELEGRAM_TIMEOUT: 60
+          TELEGRAM_RETRIES: 3
+          TELEGRAM_RETRY_DELAY: 3
+
+          HEADLESS: "true"
+          SKIP_EXISTING: "true"
+          RESET_PROGRESS: "false"
+
+        run: |
+          python shoob_scraper_tg.py
